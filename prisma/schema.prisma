@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LeaveType {
+  SICK
+  CASUAL
+  ANNUAL
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AuditAction {
+  LOGIN
+  LEAVE_REQUEST_CREATED
+  LEAVE_REQUEST_APPROVED
+  LEAVE_REQUEST_REJECTED
+}
+
+enum RoleCode {
+  EMPLOYEE
+  MANAGER
+}
+
+model Department {
+  id          Int        @id @default(autoincrement())
+  name        String     @unique
+  description String?
+  employees   Employee[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("departments")
+}
+
+model LeaveBalance {
+  id         Int      @id @default(autoincrement())
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  leaveType LeaveType
+  totalDays Int
+  usedDays  Int       @default(0)
+  year      Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, leaveType, year])
+  @@index([employeeId])
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id Int @id @default(autoincrement())
+
+  employeeId Int
+  employee   Employee @relation("EmployeeLeaveRequests", fields: [employeeId], references: [id], onDelete: Cascade)
+
+  managerId Int
+  manager   Employee @relation("ManagerLeaveRequests", fields: [managerId], references: [id], onDelete: Restrict)
+
+  leaveType    LeaveType
+  startDate    DateTime
+  endDate      DateTime
+  numberOfDays Int
+  reason       String
+  status       LeaveStatus @default(PENDING)
+
+  decisionNote String?
+  decidedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId])
+  @@index([managerId])
+  @@index([status])
+  @@map("leave_requests")
+}
+
+model Employee {
+  id       Int      @id @default(autoincrement())
+  fullName String
+  email    String   @unique
+  password String
+  role     RoleCode
+
+  departmentId Int
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+
+  managerId            Int?
+  manager              Employee?      @relation("ManagerEmployees", fields: [managerId], references: [id], onDelete: SetNull)
+  teamMembers          Employee[]     @relation("ManagerEmployees")
+  leaveBalances        LeaveBalance[]
+  leaveRequests        LeaveRequest[] @relation("EmployeeLeaveRequests")
+  managedLeaveRequests LeaveRequest[] @relation("ManagerLeaveRequests")
+  auditLogs            AuditLog[]     @relation("ActorAuditLogs")
+  isActive             Boolean        @default(true)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([departmentId])
+  @@index([managerId])
+  @@index([role])
+  @@map("employees")
+}
+
+model AuditLog {
+  id Int @id @default(autoincrement())
+
+  actorId Int?
+  actor   Employee? @relation("ActorAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  action     AuditAction
+  entityType String
+  entityId   Int?
+  metadata   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
