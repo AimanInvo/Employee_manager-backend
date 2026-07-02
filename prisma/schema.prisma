@@ -66,24 +66,18 @@ model LeaveRequest {
   employeeId Int
   employee   Employee @relation("EmployeeLeaveRequests", fields: [employeeId], references: [id], onDelete: Cascade)
 
-  managerId Int
-  manager   Employee @relation("ManagerLeaveRequests", fields: [managerId], references: [id], onDelete: Restrict)
-
   leaveType    LeaveType
   startDate    DateTime
   endDate      DateTime
   numberOfDays Int
   reason       String
   status       LeaveStatus @default(PENDING)
-
-  decisionNote String?
   decidedAt    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId])
-  @@index([managerId])
   @@index([status])
   @@map("leave_requests")
 }
@@ -98,16 +92,15 @@ model Employee {
   departmentId Int
   department   Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
 
-  managerId            Int?
-  manager              Employee?      @relation("ManagerEmployees", fields: [managerId], references: [id], onDelete: SetNull)
-  teamMembers          Employee[]     @relation("ManagerEmployees")
-  leaveBalances        LeaveBalance[]
-  leaveRequests        LeaveRequest[] @relation("EmployeeLeaveRequests")
-  managedLeaveRequests LeaveRequest[] @relation("ManagerLeaveRequests")
-  auditLogs            AuditLog[]     @relation("ActorAuditLogs")
-  isActive             Boolean        @default(true)
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  managerId     Int?
+  manager       Employee?      @relation("ManagerEmployees", fields: [managerId], references: [id], onDelete: SetNull)
+  teamMembers   Employee[]     @relation("ManagerEmployees")
+  leaveBalances LeaveBalance[]
+  leaveRequests LeaveRequest[] @relation("EmployeeLeaveRequests")
+  auditLogs     AuditLog[]     @relation("ActorAuditLogs")
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   @@index([departmentId])
   @@index([managerId])
@@ -132,4 +125,3 @@ model AuditLog {
   @@index([action])
   @@map("audit_logs")
 }
-
