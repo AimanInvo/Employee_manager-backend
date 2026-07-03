@@ -51,7 +51,10 @@ async function main() {
 
   for (let i = 1; i <= 24; i++) {
     const department = departments[i % departments.length];
-    const manager = managers[i % managers.length];
+    const assignedManagers = [
+      managers[i % managers.length],
+      managers[(i + 1) % managers.length],
+    ];
 
     const employee = await prisma.employee.upsert({
       where: { email: `employee${i}@example.com` },
@@ -62,9 +65,24 @@ async function main() {
         password: passwordHash,
         role: RoleCode.EMPLOYEE,
         departmentId: department.id,
-        managerId: manager.id,
       },
     });
+
+    for (const manager of assignedManagers) {
+      await prisma.employeeManager.upsert({
+        where: {
+          employeeId_managerId: {
+            employeeId: employee.id,
+            managerId: manager.id,
+          },
+        },
+        update: {},
+        create: {
+          employeeId: employee.id,
+          managerId: manager.id,
+        },
+      });
+    }
 
     await createLeaveBalances(employee.id);
   }

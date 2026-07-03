@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
+import type { AuthUser } from './types/auth-user.type';
 
 @Injectable()
 export class AuthService {
@@ -14,7 +15,6 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
-    //find user by email
     const user = await this.prisma.employee.findUnique({
       where: { email: loginDto.email },
     });
@@ -22,13 +22,20 @@ export class AuthService {
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid email or password');
     }
-//check if password matches
     const passwordMatches = await bcrypt.compare(loginDto.password, user.password);
 
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid email or password');
     }
-//log the login action in the audit log
+
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    };
+
+    const accessToken = await this.jwtService.signAsync(payload);
+
     await this.prisma.auditLog.create({
       data: {
         actorId: user.id,
@@ -37,15 +44,8 @@ export class AuthService {
         entityId: user.id,
       },
     });
-//generate JWT token
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
-
     return {
-      accessToken: await this.jwtService.signAsync(payload),
+      accessToken,
       user: {
         id: user.id,
         fullName: user.fullName,
@@ -53,5 +53,18 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  async logout(user: AuthUser) {
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: AuditAction.LOGOUT,
+        entityType: 'Employee',
+        entityId: user.id,
+      },
+    });
+
+    return { message: 'Logged out successfully' };
   }
 }
