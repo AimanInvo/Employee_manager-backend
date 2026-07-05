@@ -22,3 +22,11 @@
 
 2. Successful login should be logged after the token is generated.
    Right now the audit log is created before `signAsync()`. If token generation fails, the system may record a successful login even though the user did not actually receive a token.
+
+# Day 4 Review Feedback
+
+1. In the current logout flow, the API records `LOGOUT` in the audit log and returns a success message. But the JWT token is not cancelled or blocked, so the same token can still be used to call protected APIs until it expires.
+
+2. Check the user's latest role from the database on protected APIs.
+   The token should identify the user, but permission should come from the current database record.
+   This prevents users from keeping old access after their role is changed or their account is deactivated.
