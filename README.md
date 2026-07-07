@@ -92,6 +92,7 @@ Pending and rejected leave requests do not reduce the employee's leave balance.
 Audit logs will store important history, for example:
 
 - User login
+- user log out
 - Leave request created
 - Leave request approved
 - Leave request rejected

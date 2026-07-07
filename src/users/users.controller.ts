@@ -6,7 +6,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthUser } from '../auth/types/auth-user.type';
 import { UsersService } from './users.service';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
+
+@ApiTags('Users')
+@ApiBearerAuth()
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
