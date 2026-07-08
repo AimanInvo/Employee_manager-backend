@@ -6,6 +6,7 @@ import { AuditAction } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import type { AuthUser } from './types/auth-user.type';
+import { hashToken } from './utils/token-hash.util';
 
 @Injectable()
 export class AuthService {
@@ -22,7 +23,10 @@ export class AuthService {
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Invalid email or password');
     }
-    const passwordMatches = await bcrypt.compare(loginDto.password, user.password);
+    const passwordMatches = await bcrypt.compare(
+      loginDto.password,
+      user.password,
+    );
 
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid email or password');
@@ -30,8 +34,6 @@ export class AuthService {
 
     const payload = {
       sub: user.id,
-      email: user.email,
-      role: user.role,
     };
 
     const accessToken = await this.jwtService.signAsync(payload);
@@ -55,13 +57,40 @@ export class AuthService {
     };
   }
 
-  async logout(user: AuthUser) {
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        action: AuditAction.LOGOUT,
-        entityType: 'Employee',
-        entityId: user.id,
+  async logout(user: AuthUser, accessToken: string) {
+    const payload = this.jwtService.decode<{ exp?: number }>(accessToken);
+
+    if (!payload?.exp) {
+      throw new UnauthorizedException('Invalid token');
+    }
+
+    const tokenHash = hashToken(accessToken);
+
+    await this.prisma.$transaction([
+      this.prisma.revokedToken.upsert({
+        where: { tokenHash },
+        update: {},
+        create: {
+          tokenHash,
+          employeeId: user.id,
+          expiresAt: new Date(payload.exp * 1000),
+        },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: AuditAction.LOGOUT,
+          entityType: 'Employee',
+          entityId: user.id,
+        },
+      }),
+    ]);
+
+    await this.prisma.revokedToken.deleteMany({
+      where: {
+        expiresAt: {
+          lt: new Date(),
+        },
       },
     });
 

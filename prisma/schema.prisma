@@ -30,6 +30,7 @@ enum RoleCode {
   EMPLOYEE
   MANAGER
 }
+
 model Department {
   id          Int        @id @default(autoincrement())
   name        String     @unique
@@ -95,11 +96,12 @@ model Employee {
   managers      EmployeeManager[] @relation("EmployeeManagers")
   teamMembers   EmployeeManager[] @relation("ManagerEmployees")
   leaveBalances LeaveBalance[]
-  leaveRequests LeaveRequest[] @relation("EmployeeLeaveRequests")
-  auditLogs     AuditLog[]     @relation("ActorAuditLogs")
-  isActive      Boolean        @default(true)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  leaveRequests LeaveRequest[]    @relation("EmployeeLeaveRequests")
+  auditLogs     AuditLog[]        @relation("ActorAuditLogs")
+  revokedTokens RevokedToken[]
+  isActive      Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
   @@index([departmentId])
   @@index([role])
@@ -136,4 +138,23 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@map("audit_logs")
+}
+
+// This model is used to store revoked JWT tokens for security purposes.
+// When a user logs out or their token is otherwise invalidated,
+// the token's hash is stored here to prevent its reuse.
+model RevokedToken {
+  id Int @id @default(autoincrement())
+
+  tokenHash String @unique
+
+  employeeId Int
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([employeeId])
+  @@index([expiresAt])
+  @@map("revoked_tokens")
 }

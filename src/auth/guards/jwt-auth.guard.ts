@@ -6,11 +6,15 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
-import type { AuthUser } from '../types/auth-user.type';
+import { PrismaService } from '../../prisma/prisma.service';
+import { hashToken } from '../utils/token-hash.util';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
@@ -27,20 +31,48 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Invalid authorization format');
     }
 
+    let payload: { sub?: number };
+
     try {
-      const payload = await this.jwtService.verifyAsync<AuthUser & { sub: number }>(
-        token,
-      );
-
-      request['user'] = {
-        id: payload.sub,
-        email: payload.email,
-        role: payload.role,
-      };
-
-      return true;
+      payload = await this.jwtService.verifyAsync<{ sub?: number }>(token);
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
+
+    if (!payload.sub) {
+      throw new UnauthorizedException('Invalid token');
+    }
+
+    const revokedToken = await this.prisma.revokedToken.findUnique({
+      where: { tokenHash: hashToken(token) },
+      select: { id: true },
+    });
+
+    if (revokedToken) {
+      throw new UnauthorizedException('Token has been revoked');
+    }
+
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: payload.sub },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+      },
+    });
+
+    if (!employee || !employee.isActive) {
+      throw new UnauthorizedException('User is not active');
+    }
+
+    request['accessToken'] = token;
+    request['user'] = {
+      id: employee.id,
+      email: employee.email,
+      role: employee.role,
+    };
+
+    return true;
   }
 }

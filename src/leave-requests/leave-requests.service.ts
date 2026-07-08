@@ -8,6 +8,7 @@ import { AuditAction, LeaveStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/types/auth-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
+import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
 
 @Injectable()
 export class LeaveRequestsService {
@@ -79,16 +80,36 @@ export class LeaveRequestsService {
     return leaveRequest;
   }
 // Retrieve all leave requests for the authenticated user, ordered by creation date in descending order
-  async getMyLeaveRequests(user: AuthUser) {
-    return this.prisma.leaveRequest.findMany({
-      where: {
-        employeeId: user.id,
-      },
+async getMyLeaveRequests(user: AuthUser, query: PaginationQueryDto) {
+  const { page, limit } = query;
+  const skip = (page - 1) * limit;
+
+  const where = {
+    employeeId: user.id,
+  };
+// Use a transaction to fetch the leave requests and the total count in a single query for efficiency
+  const [data, total] = await this.prisma.$transaction([
+    this.prisma.leaveRequest.findMany({
+      where,
+      skip,
+      take: limit,
       orderBy: {
         createdAt: 'desc',
       },
-    });
-  }
+    }),
+    this.prisma.leaveRequest.count({ where }),
+  ]);
+
+  return {
+    data,
+    meta: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
   // Calculate the number of inclusive days between two dates, including both the start and end dates
 
   private calculateInclusiveDays(startDate: Date, endDate: Date) {
