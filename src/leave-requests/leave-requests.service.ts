@@ -2,19 +2,45 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import { AuditAction, LeaveStatus } from '@prisma/client';
+import type { Queue } from 'bullmq';
 import type { AuthUser } from '../auth/types/auth-user.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { PaginationQueryDto } from 'src/common/dto/pagination-query.dto';
 
+type LeaveEmailJobName =
+  | 'leave-request-created'
+  | 'leave-approved'
+  | 'leave-rejected';
+
+type LeaveDecisionEmailJobData = {
+  employeeEmail: string;
+  employeeName: string;
+  leaveType: string;
+  startDate: Date;
+  endDate: Date;
+  numberOfDays: number;
+};
+
+type LeaveRequestCreatedEmailJobData = LeaveDecisionEmailJobData & {
+  managerEmails: string[];
+  reason: string;
+};
+
 @Injectable()
 export class LeaveRequestsService {
 // Inject the PrismaService to interact with the database
+  private readonly logger = new Logger(LeaveRequestsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @InjectQueue('emails') private readonly emailQueue: Queue,
+  ) {}
 
   async createLeaveRequest(
     user: AuthUser,
@@ -50,34 +76,85 @@ export class LeaveRequestsService {
       throw new ForbiddenException('Not enough leave balance available');
     }
 // Create the leave request and log the action in the audit log
-    const leaveRequest = await this.prisma.leaveRequest.create({
-      data: {
-        employeeId: user.id,
-        leaveType: createLeaveRequestDto.leaveType,
-        startDate,
-        endDate,
-        numberOfDays,
-        reason: createLeaveRequestDto.reason,
-        status: LeaveStatus.PENDING,
-      },
-    });
+    const createResult = await this.prisma.$transaction(async (tx) => {
+      const leaveRequest = await tx.leaveRequest.create({
+        data: {
+          employeeId: user.id,
+          leaveType: createLeaveRequestDto.leaveType,
+          startDate,
+          endDate,
+          numberOfDays,
+          reason: createLeaveRequestDto.reason,
+          status: LeaveStatus.PENDING,
+        },
+      });
 
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: user.id,
-        action: AuditAction.LEAVE_REQUEST_CREATED,
-        entityType: 'LeaveRequest',
-        entityId: leaveRequest.id,
-        metadata: {
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: AuditAction.LEAVE_REQUEST_CREATED,
+          entityType: 'LeaveRequest',
+          entityId: leaveRequest.id,
+          metadata: {
+            leaveType: leaveRequest.leaveType,
+            startDate: leaveRequest.startDate,
+            endDate: leaveRequest.endDate,
+            numberOfDays: leaveRequest.numberOfDays,
+          },
+        },
+      });
+
+      const employee = await tx.employee.findUnique({
+        where: { id: user.id },
+        select: {
+          email: true,
+          fullName: true,
+          managers: {
+            select: {
+              manager: {
+                select: {
+                  email: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!employee) {
+        throw new NotFoundException('Employee not found');
+      }
+
+      return {
+        leaveRequest,
+        emailJobData: {
+          managerEmails: employee.managers.map(
+            (assignment) => assignment.manager.email,
+          ),
+          employeeEmail: employee.email,
+          employeeName: employee.fullName,
           leaveType: leaveRequest.leaveType,
           startDate: leaveRequest.startDate,
           endDate: leaveRequest.endDate,
           numberOfDays: leaveRequest.numberOfDays,
+          reason: leaveRequest.reason,
         },
-      },
+      };
     });
 
-    return leaveRequest;
+    if (createResult.emailJobData.managerEmails.length === 0) {
+      this.logger.warn(
+        `No managers found for leave request ${createResult.leaveRequest.id}; manager email was not queued`,
+      );
+    } else {
+      await this.queueLeaveEmail(
+        'leave-request-created',
+        createResult.emailJobData,
+        createResult.leaveRequest.id,
+      );
+    }
+
+    return createResult.leaveRequest;
   }
 // Retrieve all leave requests for the authenticated user, ordered by creation date in descending order
 async getMyLeaveRequests(user: AuthUser, query: PaginationQueryDto) {
@@ -158,9 +235,17 @@ async getMyLeaveRequests(user: AuthUser, query: PaginationQueryDto) {
 
 // Approve a leave request by its ID, ensuring that the authenticated manager is assigned to the employee and that the request is pending.
 async approveLeaveRequest(manager: AuthUser, leaveRequestId: number) {
-  return this.prisma.$transaction(async (tx) => {
+  const approvalResult = await this.prisma.$transaction(async (tx) => {
     const leaveRequest = await tx.leaveRequest.findUnique({
       where: { id: leaveRequestId },
+      include: {
+        employee: {
+          select: {
+            email: true,
+            fullName: true,
+          },
+        },
+      },
     });
 
     if (!leaveRequest) {
@@ -245,15 +330,41 @@ async approveLeaveRequest(manager: AuthUser, leaveRequestId: number) {
       },
     });
 
-    return updatedLeaveRequest;
+    return {
+      updatedLeaveRequest,
+      emailJobData: {
+        employeeEmail: leaveRequest.employee.email,
+        employeeName: leaveRequest.employee.fullName,
+        leaveType: leaveRequest.leaveType,
+        startDate: leaveRequest.startDate,
+        endDate: leaveRequest.endDate,
+        numberOfDays: leaveRequest.numberOfDays,
+      },
+    };
   });
+
+  await this.queueLeaveEmail(
+    'leave-approved',
+    approvalResult.emailJobData,
+    leaveRequestId,
+  );
+
+  return approvalResult.updatedLeaveRequest;
 }
 
 // Reject a leave request by its ID, ensuring that the authenticated manager is assigned to the employee and that the request is pending.
 async rejectLeaveRequest(manager: AuthUser, leaveRequestId: number) {
-  return this.prisma.$transaction(async (tx) => {
+  const rejectionResult = await this.prisma.$transaction(async (tx) => {
     const leaveRequest = await tx.leaveRequest.findUnique({
       where: { id: leaveRequestId },
+      include: {
+        employee: {
+          select: {
+            email: true,
+            fullName: true,
+          },
+        },
+      },
     });
 
     if (!leaveRequest) {
@@ -301,7 +412,48 @@ async rejectLeaveRequest(manager: AuthUser, leaveRequestId: number) {
       },
     });
 
-    return updatedLeaveRequest;
+    return {
+      updatedLeaveRequest,
+      emailJobData: {
+        employeeEmail: leaveRequest.employee.email,
+        employeeName: leaveRequest.employee.fullName,
+        leaveType: leaveRequest.leaveType,
+        startDate: leaveRequest.startDate,
+        endDate: leaveRequest.endDate,
+        numberOfDays: leaveRequest.numberOfDays,
+      },
+    };
   });
+
+  await this.queueLeaveEmail(
+    'leave-rejected',
+    rejectionResult.emailJobData,
+    leaveRequestId,
+  );
+
+  return rejectionResult.updatedLeaveRequest;
+}
+
+private async queueLeaveEmail(
+  jobName: LeaveEmailJobName,
+  emailJobData: LeaveDecisionEmailJobData | LeaveRequestCreatedEmailJobData,
+  leaveRequestId: number,
+) {
+  try {
+    await this.emailQueue.add(jobName, emailJobData, {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 5000,
+      },
+      removeOnComplete: true,
+      removeOnFail: false,
+    });
+  } catch (error) {
+    this.logger.error(
+      `Failed to queue ${jobName} email for leave request ${leaveRequestId}`,
+      error instanceof Error ? error.stack : String(error),
+    );
+  }
 }
 }

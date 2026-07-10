@@ -87,8 +87,62 @@ async function main() {
     await createLeaveBalances(employee.id);
   }
 
+  const emailTestManager = await prisma.employee.upsert({
+    where: { email: 'aimanzaheer66@gmail.com' },
+    update: {
+      fullName: 'Aiman Manager',
+      password: passwordHash,
+      role: RoleCode.MANAGER,
+      departmentId: departments[0].id,
+      isActive: true,
+    },
+    create: {
+      fullName: 'Aiman Manager',
+      email: 'aimanzaheer66@gmail.com',
+      password: passwordHash,
+      role: RoleCode.MANAGER,
+      departmentId: departments[0].id,
+    },
+  });
+
+  const emailTestEmployee = await prisma.employee.upsert({
+    where: { email: 'employee@yopmail.com' },
+    update: {
+      fullName: 'YOPmail Employee',
+      password: passwordHash,
+      role: RoleCode.EMPLOYEE,
+      departmentId: departments[0].id,
+      isActive: true,
+    },
+    create: {
+      fullName: 'YOPmail Employee',
+      email: 'employee@yopmail.com',
+      password: passwordHash,
+      role: RoleCode.EMPLOYEE,
+      departmentId: departments[0].id,
+    },
+  });
+
+  await prisma.employeeManager.upsert({
+    where: {
+      employeeId_managerId: {
+        employeeId: emailTestEmployee.id,
+        managerId: emailTestManager.id,
+      },
+    },
+    update: {},
+    create: {
+      employeeId: emailTestEmployee.id,
+      managerId: emailTestManager.id,
+    },
+  });
+
+  await createLeaveBalances(emailTestEmployee.id);
+
   console.log('Seed completed successfully.');
   console.log(`Default password for all users: ${DEFAULT_PASSWORD}`);
+  console.log('Email test manager: aimanzaheer66@gmail.com');
+  console.log('Email test employee: employee@yopmail.com');
 }
 
 async function createLeaveBalances(employeeId: number) {
